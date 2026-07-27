@@ -3,7 +3,7 @@ name: altabots-version-archive
 description: Companion to altabots-agent-skill. Whenever a .bot/.flow is generated or published, archive it into a local git repo (permanent history — the AltaBots platform only keeps the 10 most recent versions and has no API to export a historical or current config back down). Auto-diffs against the previous version at the node/prompt-section level (FlowAgent, Workflow, and QuestionAnswer schemas) and auto-appends a factual changelog entry to CHANGELOG.md as part of the same command — no separate manual step. Can optionally auto-create a private GitHub repo (personal account or a GitHub Organization) via the GitHub API and push to it, with zero browser interaction. Can also restore/extract any archived historical version back out of git. Use whenever the user builds/updates/publishes an AltaBots Agent, FlowAgent, or Workflow and wants the change permanently recorded, or asks to set up version tracking / changelog / git archiving / cloud backup for an AltaBots agent.
 license: MIT
 metadata:
-  version: 2.2.0
+  version: 2.3.0
   generatedBy: altabots-version-archive
   customizedBy: gray
 ---
@@ -133,21 +133,35 @@ Run the check, then ask, then act:
 ```
 python3 scripts/check_remote_exists.py <project-name> [--github-org <org>]
 ```
-This only reads (`GET /repos/<owner>/<name>`) — it never creates or pushes
-anything. Then:
-- **`FOUND <ssh_url>`** → tell the user a repo with this name already
-  exists there and ask them to confirm before pushing into it (e.g. *"我在
-  你的雲端發現一個叫 `<name>` 的 repo,確認要存進去嗎?"*). If they confirm,
-  set that URL as `origin` yourself (`git remote add origin <ssh_url>`) and
-  run `archive_to_git.py --push` (no `--create-remote` needed at that
-  point — `origin` is now already set).
-- **`NOT_FOUND`** → tell the user there's no such project yet and ask
-  whether to create one (e.g. *"目前沒有 `<name>` 這個專案,要建立並存入
-  嗎?"*). Only run `archive_to_git.py --push --create-remote` after they
-  say yes.
+This only reads — it never creates or pushes anything. Three outcomes:
+- **`FOUND <ssh_url>`** (exit 0) → an EXACT name match exists. Tell the user
+  and ask them to confirm before pushing into it (e.g. *"我在你的雲端發現一
+  個叫 `<name>` 的 repo,確認要存進去嗎?"*). If they confirm, set that URL
+  as `origin` yourself (`git remote add origin <ssh_url>`) and run
+  `archive_to_git.py --push` (no `--create-remote` needed — `origin` is now
+  already set).
+- **`CANDIDATES` + a list of `full_name<TAB>ssh_url<TAB>description` lines**
+  (exit 2) → no exact name match, but the fuzzy fallback (matches against
+  every repo's name AND description — this is the part that catches a
+  Chinese project label against an English repo slug, e.g. querying "陽明
+  海運" finds a repo named `yangming-agent` whose *description* is "陽明海運
+  客服 agent") found candidates. **Show the user the list and ask which one
+  they meant, or whether this is genuinely a new project.** Never just pick
+  the top candidate yourself — a wrong guess here means pushing a client's
+  data into the wrong client's repo.
+- **`NOT_FOUND`** (exit 1) → nothing exact or similar. Tell the user there's
+  no such project yet and ask whether to create one (e.g. *"目前沒有
+  `<name>` 這個專案,要建立並存入嗎?"*). Only run `archive_to_git.py --push
+  --create-remote` after they say yes.
 - Never skip this check-and-ask step "to save time" — a name collision or a
   wrong guess about which repo the user meant is exactly what this step
   exists to prevent.
+- **When you DO create a new repo**, pass `--project-label "<what the user
+  actually calls this project>"` to `archive_to_git.py` alongside
+  `--create-remote` — this sets the repo's `description`, which is the only
+  thing that makes a future fuzzy search find it again when the project's
+  real name and its repo's (English, slug-shaped) name don't textually
+  match.
 
 **Restoring an old version** (the reverse direction — git back out to a file
 ready to re-publish):

@@ -197,7 +197,8 @@ def write_changelog(repo_dir, dest, version, message, author, has_parent):
     print(f"changelog: appended {label} entry ({len(rows)} row(s)) to CHANGELOG.md")
 
 
-def create_github_repo(name, token, private=True, org=None, api_base="https://api.github.com"):
+def create_github_repo(name, token, private=True, org=None, description=None,
+                        api_base="https://api.github.com"):
     """Create a new repo via the GitHub REST API and return its SSH clone
     URL. Two destinations, both keyed off the SAME `name` argument so each
     project still lands in its own distinctly-named repo no matter which
@@ -207,14 +208,25 @@ def create_github_repo(name, token, private=True, org=None, api_base="https://ap
     Once the company has a GitHub Org, point every project at it with
     --github-org instead of switching to a different tool — same script,
     same per-project repo-per-project naming, different destination.
+
+    `description` matters more than it looks: check_remote_exists.py's fuzzy
+    match falls back to matching against a repo's description when the
+    repo's (English, slug-shaped) name doesn't textually match what the
+    user actually calls the project (e.g. a Chinese client name). Setting
+    it here at creation time (via --project-label) is what makes that
+    fallback able to find this repo again later.
+
     Always private unless the caller explicitly overrides — never default a
     freshly-created repo to public. Raises SystemExit with a clear message
     on any API error (name collision, bad/expired token, no org access,
     etc.) rather than leaving the repo in a half-configured state."""
     path = f"/orgs/{org}/repos" if org else "/user/repos"
+    payload = {"name": name, "private": private}
+    if description:
+        payload["description"] = description
     req = urllib.request.Request(
         f"{api_base}{path}",
-        data=json.dumps({"name": name, "private": private}).encode(),
+        data=json.dumps(payload).encode(),
         method="POST",
         headers={
             "Authorization": f"Bearer {token}",
@@ -250,6 +262,11 @@ def main(argv):
                          "No-op if 'origin' already exists. Requires --push.")
     ap.add_argument("--remote-name", default=None,
                     help="name for the auto-created GitHub repo (default: the repo folder's name)")
+    ap.add_argument("--project-label", default=None,
+                    help="human-readable project label (e.g. a Chinese client name) to set as the "
+                         "new repo's description — this is what check_remote_exists.py's fuzzy "
+                         "match later searches when the repo name itself doesn't match what the "
+                         "user calls the project")
     ap.add_argument("--github-org", default=os.environ.get("GITHUB_ORG"),
                     help="create the repo under this GitHub Organization instead of the token "
                          "owner's personal account (or set GITHUB_ORG) — only used with --create-remote")
@@ -320,7 +337,8 @@ def main(argv):
             remote_name = args.remote_name or repo_dir.name
             api_base = os.environ.get("GITHUB_API_BASE", "https://api.github.com")
             ssh_url = create_github_repo(remote_name, args.github_token, private=True,
-                                          org=args.github_org, api_base=api_base)
+                                          org=args.github_org, description=args.project_label,
+                                          api_base=api_base)
             run(["git", "remote", "add", "origin", ssh_url], cwd=repo_dir)
             owner = args.github_org or "your account"
             print(f"created private GitHub repo {remote_name!r} under {owner} -> {ssh_url}")

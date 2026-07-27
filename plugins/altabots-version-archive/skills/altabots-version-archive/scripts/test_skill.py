@@ -170,19 +170,29 @@ def test_archive_no_changelog_flag_skips_it():
 class _MockGitHubHandler(BaseHTTPRequestHandler):
     created = []  # (path, body dict) for every POST this process handled
     existing_repos = set()  # {"owner/name", ...} — GET /repos/<owner>/<name> hits among these
+    repo_list = []  # [{"name", "full_name", "ssh_url", "description"}, ...] for the /user/repos or
+                     # /orgs/<org>/repos LISTING endpoint (the fuzzy-match fallback's data source)
 
     def log_message(self, *a):
         pass  # silence default request logging
 
     def do_GET(self):
-        if self.path == "/user":
+        path, _, query = self.path.partition("?")
+        if path == "/user":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"login": "mock-user"}).encode())
             return
-        if self.path.startswith("/repos/"):
-            owner_name = self.path[len("/repos/"):]
+        if path in ("/user/repos",) or path.startswith("/orgs/") and path.endswith("/repos"):
+            page = "page=1" in query or "page=" not in query
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(_MockGitHubHandler.repo_list if page else []).encode())
+            return
+        if path.startswith("/repos/"):
+            owner_name = path[len("/repos/"):]
             if owner_name in _MockGitHubHandler.existing_repos:
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -391,6 +401,87 @@ def test_check_remote_missing_token_fails_clearly():
     env = {k: v for k, v in os.environ.items() if k != "GITHUB_TOKEN"}
     r = subprocess.run([sys.executable, str(CHECK_REMOTE), "whatever"], capture_output=True, text=True, env=env)
     check("check-remote: fails clearly (exit 3) with no token", r.returncode == 3, r.stdout + r.stderr)
+
+
+def test_check_remote_fuzzy_match_by_description():
+    """The exact case you're worried about: the query ("陽明海運") doesn't
+    literally match the repo's (English, slug-shaped) name at all — the
+    match can ONLY come from the description. This is why archive_to_git.py
+    --project-label sets it at creation time."""
+    _MockGitHubHandler.repo_list = [
+        {"name": "yangming-agent", "full_name": "mock-user/yangming-agent",
+         "ssh_url": "git@mock:mock-user/yangming-agent.git", "description": "陽明海運 客服 agent"},
+        {"name": "unrelated-thing", "full_name": "mock-user/unrelated-thing",
+         "ssh_url": "git@mock:mock-user/unrelated-thing.git", "description": "totally unrelated"},
+    ]
+    server, api_base = _start_mock_github()
+    try:
+        env = dict(os.environ, GITHUB_API_BASE=api_base, GITHUB_TOKEN="fake-token")
+        r = subprocess.run([sys.executable, str(CHECK_REMOTE), "陽明海運"], capture_output=True, text=True, env=env)
+        check("check-remote fuzzy: exit 2 (candidates found, not an exact match)", r.returncode == 2, r.stdout + r.stderr)
+        check("check-remote fuzzy: reports CANDIDATES", r.stdout.startswith("CANDIDATES"), r.stdout)
+        check("check-remote fuzzy: finds the repo whose DESCRIPTION matches, name alone wouldn't have",
+              "yangming-agent" in r.stdout)
+        check("check-remote fuzzy: does not surface the unrelated repo",
+              "unrelated-thing" not in r.stdout)
+    finally:
+        server.shutdown()
+        _MockGitHubHandler.repo_list = []
+
+
+def test_check_remote_fuzzy_match_by_name_typo():
+    _MockGitHubHandler.repo_list = [
+        {"name": "yangming-agent", "full_name": "mock-user/yangming-agent",
+         "ssh_url": "git@mock:mock-user/yangming-agent.git", "description": ""},
+    ]
+    server, api_base = _start_mock_github()
+    try:
+        env = dict(os.environ, GITHUB_API_BASE=api_base, GITHUB_TOKEN="fake-token")
+        r = subprocess.run([sys.executable, str(CHECK_REMOTE), "yangming-agents"],
+                            capture_output=True, text=True, env=env)
+        check("check-remote fuzzy: near-identical name (typo/plural) surfaces as a candidate",
+              r.returncode == 2 and "yangming-agent" in r.stdout, r.stdout + r.stderr)
+    finally:
+        server.shutdown()
+        _MockGitHubHandler.repo_list = []
+
+
+def test_check_remote_no_candidates_reports_not_found():
+    _MockGitHubHandler.repo_list = [
+        {"name": "completely-different-project", "full_name": "mock-user/completely-different-project",
+         "ssh_url": "git@mock:x.git", "description": "nothing like the query"},
+    ]
+    server, api_base = _start_mock_github()
+    try:
+        env = dict(os.environ, GITHUB_API_BASE=api_base, GITHUB_TOKEN="fake-token")
+        r = subprocess.run([sys.executable, str(CHECK_REMOTE), "brand-new-project-xyz"],
+                            capture_output=True, text=True, env=env)
+        check("check-remote fuzzy: genuinely unrelated repos don't get pulled in as false candidates",
+              r.returncode == 1 and "NOT_FOUND" in r.stdout, r.stdout + r.stderr)
+    finally:
+        server.shutdown()
+        _MockGitHubHandler.repo_list = []
+
+
+def test_create_remote_sets_description_from_project_label():
+    _MockGitHubHandler.created.clear()
+    server, api_base = _start_mock_github()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bot = tmp / "agent.bot"
+            write_json(bot, {"formatVersion": "1.0", "exportType": "BOT", "exportTime": 1,
+                              "name": "T", "botType": "QuestionAnswer", "prompt": "hi"})
+            env = dict(os.environ, GITHUB_API_BASE=api_base, GITHUB_TOKEN="fake-token")
+            r = subprocess.run([sys.executable, str(ARCHIVE), str(bot), "--push", "--create-remote",
+                                 "--remote-name", "yangming-agent", "--project-label", "陽明海運 客服 agent"],
+                                cwd=tmp, capture_output=True, text=True, env=env)
+            check("create-remote --project-label: exits 0", r.returncode == 0, r.stdout + r.stderr)
+            check("create-remote --project-label: sends the label as the repo's description",
+                  _MockGitHubHandler.created and _MockGitHubHandler.created[0][1].get("description") == "陽明海運 客服 agent",
+                  str(_MockGitHubHandler.created))
+    finally:
+        server.shutdown()
 
 
 # ---------------------------------------------------------------------------
