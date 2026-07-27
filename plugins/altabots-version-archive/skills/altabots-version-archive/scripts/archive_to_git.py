@@ -262,6 +262,10 @@ def main(argv):
                          "No-op if 'origin' already exists. Requires --push.")
     ap.add_argument("--remote-name", default=None,
                     help="name for the auto-created GitHub repo (default: the repo folder's name)")
+    ap.add_argument("--public", action="store_true",
+                    help="create the repo as PUBLIC instead of the default private. Opt-in only — "
+                         "never used unless explicitly passed. Use for genuinely non-sensitive "
+                         "content (e.g. a demo to share), never for client/business data.")
     ap.add_argument("--project-label", default=None,
                     help="human-readable project label (e.g. a Chinese client name) to set as the "
                          "new repo's description — this is what check_remote_exists.py's fuzzy "
@@ -336,12 +340,13 @@ def main(argv):
                 return 3
             remote_name = args.remote_name or repo_dir.name
             api_base = os.environ.get("GITHUB_API_BASE", "https://api.github.com")
-            ssh_url = create_github_repo(remote_name, args.github_token, private=True,
+            ssh_url = create_github_repo(remote_name, args.github_token, private=not args.public,
                                           org=args.github_org, description=args.project_label,
                                           api_base=api_base)
             run(["git", "remote", "add", "origin", ssh_url], cwd=repo_dir)
             owner = args.github_org or "your account"
-            print(f"created private GitHub repo {remote_name!r} under {owner} -> {ssh_url}")
+            visibility = "PUBLIC" if args.public else "private"
+            print(f"created {visibility} GitHub repo {remote_name!r} under {owner} -> {ssh_url}")
             remotes.append("origin")
 
         if "origin" in remotes:

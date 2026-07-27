@@ -34,3 +34,14 @@ Data-DI 內部的 AltaBots agent 開發 Claude Code skills 集合。
 ```
 
 裝完之後,直接用自然語言請 Claude 幫你存版本、比對差異、或存到雲端即可,不需要背指令。技術細節見 [`plugins/altabots-version-archive/skills/altabots-version-archive/SKILL.md`](plugins/altabots-version-archive/skills/altabots-version-archive/SKILL.md)。
+
+## 裝完之後,要準備兩組不同的東西(缺一不可)
+
+這兩個是完全不同用途的授權,不要搞混——有其中一個不代表另一個也有:
+
+| 要準備的東西 | 用在哪 | 什麼時候需要 |
+|---|---|---|
+| **SSH key**(在 GitHub → Settings → SSH and GPG keys 加你的公鑰) | 讓 `git push` 能動 | 只要你要把版本推到雲端,一定要有 |
+| **GitHub Personal Access Token**(存成環境變數 `GITHUB_TOKEN`,在 GitHub → Settings → Developer settings → Personal access tokens 產生,選 `repo` 權限) | 呼叫 GitHub API | 只有要用「自動建立新的雲端 repo」這個功能時才需要;如果每個專案的 repo 都已經有人建好了,你只需要 SSH key 就夠 |
+
+兩者都是**一次性設定**,設定好之後就不用每次重複做。

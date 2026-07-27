@@ -3,7 +3,7 @@ name: altabots-version-archive
 description: Companion to altabots-agent-skill. Whenever a .bot/.flow is generated or published, archive it into a local git repo (permanent history — the AltaBots platform only keeps the 10 most recent versions and has no API to export a historical or current config back down). Auto-diffs against the previous version at the node/prompt-section level (FlowAgent, Workflow, and QuestionAnswer schemas) and auto-appends a factual changelog entry to CHANGELOG.md as part of the same command — no separate manual step. Can optionally auto-create a private GitHub repo (personal account or a GitHub Organization) via the GitHub API and push to it, with zero browser interaction. Can also restore/extract any archived historical version back out of git. Use whenever the user builds/updates/publishes an AltaBots Agent, FlowAgent, or Workflow and wants the change permanently recorded, or asks to set up version tracking / changelog / git archiving / cloud backup for an AltaBots agent.
 license: MIT
 metadata:
-  version: 2.3.0
+  version: 2.4.0
   generatedBy: altabots-version-archive
   customizedBy: gray
 ---
@@ -68,6 +68,27 @@ preserves ids across re-exports of the same agent. Not confirmed against the
 platform's actual export behavior — if ids ever get reassigned, an unchanged node
 could misreport as removed+added. Flagged here rather than silently assumed away.
 
+## Prerequisites — TWO separate credentials, not one
+
+Don't conflate these — they authenticate completely different things, and
+having one proves nothing about the other:
+
+| Credential | Authenticates | Needed for |
+|---|---|---|
+| **SSH key** (public half added at GitHub → Settings → SSH and GPG keys) | `git clone` / `git push` / `git pull` | Every `archive_to_git.py --push` call, once `origin` already exists |
+| **GitHub Personal Access Token** (`GITHUB_TOKEN` / `--github-token`) | GitHub's REST API | Only `--create-remote` and `check_remote_exists.py` — creating a new repo, or checking whether one already exists |
+
+A working `git push` to an existing repo tells you nothing about whether
+`--create-remote` will work — that path calls the GitHub API, not git, and
+needs the token, set up separately. One-time setup per machine:
+1. Generate an SSH key, add the **public** half to GitHub → Settings → SSH
+   and GPG keys. Needed for pushing at all.
+2. Generate a Personal Access Token — classic, `repo` scope — at GitHub →
+   Settings → Developer settings → Personal access tokens. Set it as
+   `GITHUB_TOKEN`. Only needed if you'll ever use `--create-remote` /
+   `check_remote_exists.py`; skip it if every project's repo is already
+   created and you'll only ever push into existing ones.
+
 ## Usage
 
 **One command does the whole thing** — archive, diff against the previous
@@ -118,7 +139,10 @@ python3 scripts/archive_to_git.py <file.bot> --push --create-remote \
   a company Organization rather than their own personal account; and a
   project name (`--remote-name`, defaults to the repo folder's name) so
   each project lands in its own distinctly-named repo.
-- Always creates the repo **private** — never defaults to public.
+- Always creates the repo **private** by default. Pass `--public` to opt
+  into a public repo instead — only when the user has explicitly asked for
+  that (e.g. a demo to share), never for client/business content. Never
+  add `--public` on your own initiative.
 - If `origin` already exists, `--create-remote` is a no-op (never
   recreates/overwrites an existing remote) — it only fills the gap when
   there's nowhere to push yet.
@@ -163,6 +187,22 @@ This only reads — it never creates or pushes anything. Three outcomes:
   real name and its repo's (English, slug-shaped) name don't textually
   match.
 
+**MANDATORY the first time a project gets its own repo** (whether via
+`--create-remote` or a plain local `git init` with no remote configured
+yet): also write a `README.md` into that repo and commit it alongside the
+`.bot`/`.flow` file — this is a required step, not optional polish. At
+minimum cover:
+- what the agent/workflow actually does, and its `botType`
+- its node/flow architecture — pull this from `diff_bot_nodes.py`'s output
+  (or just read the file), don't leave it as a placeholder
+- any real issues found (e.g. `validate_altabots_config.py` errors) —
+  state facts found, don't invent problems
+A repo with no README is indistinguishable from an unlabeled blob of JSON
+to anyone who opens it later, including the person who made it. Update
+this README when the architecture itself changes; don't rewrite it on
+every single version bump — `CHANGELOG.md` already covers per-version
+facts, README covers "what this project IS" as of now.
+
 **Restoring an old version** (the reverse direction — git back out to a file
 ready to re-publish):
 ```
@@ -185,7 +225,13 @@ script's).
   makes explicitly by passing that flag — never default into creating cloud
   infrastructure on your own initiative.
 - A newly auto-created repo (`--create-remote`) is always private. Never pass
-  a flag that would make it public without the user explicitly asking for that.
+  `--public` without the user explicitly asking for that.
+- Never assume having a working SSH-based `git push` means a GitHub token is
+  also available (or vice versa) — they're two separate credentials for two
+  separate things (see Prerequisites above). Check which one the task
+  actually needs before assuming either is set up.
+- Never skip writing a README.md the first time a project gets its own repo
+  — see the MANDATORY note under "Auto-creating the cloud repo" above.
 - After editing any script in `scripts/`, run `python3 scripts/test_skill.py` —
   it locks in behaviors that previously regressed silently (e.g. the Workflow
   schema being misdetected as FlowAgent, or a no-op commit skipping its tag).

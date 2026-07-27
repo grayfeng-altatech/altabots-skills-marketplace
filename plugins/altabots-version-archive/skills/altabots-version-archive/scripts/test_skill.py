@@ -484,6 +484,42 @@ def test_create_remote_sets_description_from_project_label():
         server.shutdown()
 
 
+def test_create_remote_defaults_private_unless_public_flag():
+    _MockGitHubHandler.created.clear()
+    server, api_base = _start_mock_github()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bot = tmp / "agent.bot"
+            write_json(bot, {"formatVersion": "1.0", "exportType": "BOT", "exportTime": 1,
+                              "name": "T", "botType": "QuestionAnswer", "prompt": "hi"})
+            env = dict(os.environ, GITHUB_API_BASE=api_base, GITHUB_TOKEN="fake-token")
+            r1 = subprocess.run([sys.executable, str(ARCHIVE), str(bot), "--push", "--create-remote"],
+                                 cwd=tmp, capture_output=True, text=True, env=env)
+            check("create-remote: private=True by default (no --public)",
+                  r1.returncode == 0 and _MockGitHubHandler.created[-1][1].get("private") is True,
+                  str(_MockGitHubHandler.created))
+    finally:
+        server.shutdown()
+
+    _MockGitHubHandler.created.clear()
+    server, api_base = _start_mock_github()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bot = tmp / "agent.bot"
+            write_json(bot, {"formatVersion": "1.0", "exportType": "BOT", "exportTime": 1,
+                              "name": "T", "botType": "QuestionAnswer", "prompt": "hi"})
+            env = dict(os.environ, GITHUB_API_BASE=api_base, GITHUB_TOKEN="fake-token")
+            r2 = subprocess.run([sys.executable, str(ARCHIVE), str(bot), "--push", "--create-remote", "--public"],
+                                 cwd=tmp, capture_output=True, text=True, env=env)
+            check("create-remote --public: private=False only when explicitly passed",
+                  r2.returncode == 0 and _MockGitHubHandler.created[-1][1].get("private") is False,
+                  str(_MockGitHubHandler.created))
+    finally:
+        server.shutdown()
+
+
 # ---------------------------------------------------------------------------
 # restore_version.py
 # ---------------------------------------------------------------------------
