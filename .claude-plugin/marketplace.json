@@ -1,0 +1,15 @@
+{
+  "name": "altabots-skills",
+  "owner": {
+    "name": "Gray Feng",
+    "email": "gray.feng@data-di.com"
+  },
+  "description": "Data-DI internal Claude Code skills for AltaBots agent development",
+  "plugins": [
+    {
+      "name": "altabots-version-archive",
+      "source": "./plugins/altabots-version-archive",
+      "description": "Archive AltaBots .bot/.flow versions to git with auto-diff and auto-changelog"
+    }
+  ]
+}

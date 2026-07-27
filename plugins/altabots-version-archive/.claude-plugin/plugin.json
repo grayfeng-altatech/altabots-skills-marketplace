@@ -1,0 +1,10 @@
+{
+  "name": "altabots-version-archive",
+  "description": "Archive AltaBots .bot/.flow versions to git with auto-diff and auto-changelog, plus a restore tool to pull an old version back out",
+  "version": "2.0.0",
+  "author": {
+    "name": "Gray Feng",
+    "email": "gray.feng@data-di.com"
+  },
+  "license": "MIT"
+}
