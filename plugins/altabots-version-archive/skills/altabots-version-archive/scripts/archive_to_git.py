@@ -34,17 +34,31 @@ What it does, in order:
      not invent a business reason *why*, or map to a known-issues list —
      add that by hand (or have a skill add it) if you have it.
   7. With --push, pushes branch+tags to 'origin' IF that remote is already
-     configured; otherwise it just stays committed locally. This script
-     never creates or configures a remote itself.
+     configured. With --push --create-remote and no 'origin' yet, it will
+     ALSO create that remote first: a new PRIVATE GitHub repo (via the
+     GitHub API, using GITHUB_TOKEN/--github-token — never asks for a
+     password), named after the repo folder unless --remote-name overrides
+     it, then sets it as 'origin' and pushes. By default the repo is
+     created under the token owner's own personal account; pass
+     --github-org/GITHUB_ORG to create it under a GitHub Organization
+     instead (e.g. once the company has one) — every project still gets
+     its own distinctly-named repo either way, just under a different
+     owner. Without --create-remote, a missing 'origin' is left alone
+     (nothing pushed) — repo creation is opt-in, never automatic, because
+     which cloud/account/visibility to use is a deliberate decision.
 
-Exit codes: 0 ok (including no-op when nothing changed); 4 usage error.
+Exit codes: 0 ok (including no-op when nothing changed); 3 GitHub API error;
+4 usage error.
 """
 import argparse
 import getpass
 import json
+import os
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -183,6 +197,42 @@ def write_changelog(repo_dir, dest, version, message, author, has_parent):
     print(f"changelog: appended {label} entry ({len(rows)} row(s)) to CHANGELOG.md")
 
 
+def create_github_repo(name, token, private=True, org=None, api_base="https://api.github.com"):
+    """Create a new repo via the GitHub REST API and return its SSH clone
+    URL. Two destinations, both keyed off the SAME `name` argument so each
+    project still lands in its own distinctly-named repo no matter which
+    account/org owns it:
+      - org=None: POST /user/repos      -> under the TOKEN OWNER's personal account
+      - org="acme":  POST /orgs/acme/repos -> under that GitHub Organization
+    Once the company has a GitHub Org, point every project at it with
+    --github-org instead of switching to a different tool — same script,
+    same per-project repo-per-project naming, different destination.
+    Always private unless the caller explicitly overrides — never default a
+    freshly-created repo to public. Raises SystemExit with a clear message
+    on any API error (name collision, bad/expired token, no org access,
+    etc.) rather than leaving the repo in a half-configured state."""
+    path = f"/orgs/{org}/repos" if org else "/user/repos"
+    req = urllib.request.Request(
+        f"{api_base}{path}",
+        data=json.dumps({"name": name, "private": private}).encode(),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        raise SystemExit(f"GitHub API error creating repo {name!r}: HTTP {e.code}\n{body}")
+    except urllib.error.URLError as e:
+        raise SystemExit(f"network error calling GitHub API: {e}")
+    return data["ssh_url"]
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description="Archive a .bot/.flow into git as a permanent version history")
     ap.add_argument("file", help="path to the generated .bot or .flow file")
@@ -194,6 +244,18 @@ def main(argv):
                          "tagged as altabots-v<version>")
     ap.add_argument("--push", action="store_true",
                     help="push branch+tags to 'origin' if that remote is configured")
+    ap.add_argument("--create-remote", action="store_true",
+                    help="if 'origin' isn't configured yet, create a new PRIVATE GitHub repo "
+                         "(via GITHUB_TOKEN / --github-token) and use it as origin, then push. "
+                         "No-op if 'origin' already exists. Requires --push.")
+    ap.add_argument("--remote-name", default=None,
+                    help="name for the auto-created GitHub repo (default: the repo folder's name)")
+    ap.add_argument("--github-org", default=os.environ.get("GITHUB_ORG"),
+                    help="create the repo under this GitHub Organization instead of the token "
+                         "owner's personal account (or set GITHUB_ORG) — only used with --create-remote")
+    ap.add_argument("--github-token", default=os.environ.get("GITHUB_TOKEN"),
+                    help="GitHub personal access token with repo-creation scope "
+                         "(or set GITHUB_TOKEN) — only used with --create-remote")
     ap.add_argument("--no-changelog", action="store_true",
                     help="skip auto-appending a CHANGELOG.md entry for this commit")
     args = ap.parse_args(argv)
@@ -250,13 +312,27 @@ def main(argv):
 
     if args.push:
         remotes = run(["git", "remote"], cwd=repo_dir, check=False).split()
+        if "origin" not in remotes and args.create_remote:
+            if not args.github_token:
+                print("--create-remote needs a GitHub token: set GITHUB_TOKEN or pass --github-token",
+                      file=sys.stderr)
+                return 3
+            remote_name = args.remote_name or repo_dir.name
+            api_base = os.environ.get("GITHUB_API_BASE", "https://api.github.com")
+            ssh_url = create_github_repo(remote_name, args.github_token, private=True,
+                                          org=args.github_org, api_base=api_base)
+            run(["git", "remote", "add", "origin", ssh_url], cwd=repo_dir)
+            owner = args.github_org or "your account"
+            print(f"created private GitHub repo {remote_name!r} under {owner} -> {ssh_url}")
+            remotes.append("origin")
+
         if "origin" in remotes:
             run(["git", "push", "origin", "HEAD"], cwd=repo_dir)
             run(["git", "push", "origin", "--tags"], cwd=repo_dir)
             print("pushed to origin")
         else:
             print("no 'origin' remote configured — commit saved locally only "
-                  "(run `git remote add origin <url>` first)")
+                  "(run `git remote add origin <url>` first, or pass --create-remote)")
 
     return 0
 

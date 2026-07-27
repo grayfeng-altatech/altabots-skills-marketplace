@@ -1,9 +1,9 @@
 ---
 name: altabots-version-archive
-description: Companion to altabots-agent-skill. Whenever a .bot/.flow is generated or published, archive it into a local git repo (permanent history — the AltaBots platform only keeps the 10 most recent versions and has no API to export a historical or current config back down). Auto-diffs against the previous version at the node/prompt-section level (FlowAgent, Workflow, and QuestionAnswer schemas) and auto-appends a factual changelog entry to CHANGELOG.md as part of the same command — no separate manual step. Can also restore/extract any archived historical version back out of git. Use whenever the user builds/updates/publishes an AltaBots Agent, FlowAgent, or Workflow and wants the change permanently recorded, or asks to set up version tracking / changelog / git archiving for an AltaBots agent.
+description: Companion to altabots-agent-skill. Whenever a .bot/.flow is generated or published, archive it into a local git repo (permanent history — the AltaBots platform only keeps the 10 most recent versions and has no API to export a historical or current config back down). Auto-diffs against the previous version at the node/prompt-section level (FlowAgent, Workflow, and QuestionAnswer schemas) and auto-appends a factual changelog entry to CHANGELOG.md as part of the same command — no separate manual step. Can optionally auto-create a private GitHub repo (personal account or a GitHub Organization) via the GitHub API and push to it, with zero browser interaction. Can also restore/extract any archived historical version back out of git. Use whenever the user builds/updates/publishes an AltaBots Agent, FlowAgent, or Workflow and wants the change permanently recorded, or asks to set up version tracking / changelog / git archiving / cloud backup for an AltaBots agent.
 license: MIT
 metadata:
-  version: 2.0.0
+  version: 2.1.0
   generatedBy: altabots-version-archive
   customizedBy: gray
 ---
@@ -39,7 +39,7 @@ after a console edit"), not something this skill can close on its own.
 ```
 SKILL.md
 scripts/
-  archive_to_git.py     # commit + tag + auto-changelog a .bot/.flow into a git repo (the main entry point)
+  archive_to_git.py     # commit + tag + auto-changelog (+ optional auto-created GitHub remote) (the main entry point)
   diff_bot_nodes.py      # structural diff between two .bot/.flow snapshots (used internally by archive_to_git.py)
   clean_bot_diff.py      # git textconv helper: hides volatile fields (exportTime) from `git diff`/`git log -p`
   restore_version.py     # the reverse direction: extract a historical version back out of the git archive
@@ -98,10 +98,32 @@ python3 scripts/archive_to_git.py <file.bot> [--repo-dir DIR] [--message "..."] 
   add it) as a manual edit to the generated entry if you have that context —
   never fabricate a "已知問題" table the user didn't give you.
 - With `--push`, pushes branch + tags to `origin` **only if that remote is
-  already configured** — it never creates or configures a remote itself;
-  that's a separate, deliberate decision (which cloud, whose account, repo
-  access/visibility for client-sensitive content) the user/org makes
-  explicitly, not something to default into silently.
+  already configured**. On its own, `--push` still never creates or
+  configures a remote — repo creation is opt-in (below), not automatic.
+
+**Auto-creating the cloud repo** (no browser needed — pure GitHub API):
+```
+python3 scripts/archive_to_git.py <file.bot> --push --create-remote \
+    [--remote-name <project-name>] [--github-org <org>] [--github-token <token>]
+```
+- Add `--create-remote` alongside `--push`, and if `origin` isn't configured
+  yet, it creates a new **private** GitHub repo via the GitHub REST API
+  (`POST /user/repos` or, with `--github-org`, `POST /orgs/<org>/repos`),
+  sets it as `origin`, then pushes — end to end, no manual "create
+  repository" step in a browser.
+- **What the person running it needs**: a GitHub Personal Access Token with
+  repo-creation scope, set once as `GITHUB_TOKEN` (or passed via
+  `--github-token`); optionally `GITHUB_ORG`/`--github-org` if the target is
+  a company Organization rather than their own personal account; and a
+  project name (`--remote-name`, defaults to the repo folder's name) so
+  each project lands in its own distinctly-named repo.
+- Always creates the repo **private** — never defaults to public.
+- If `origin` already exists, `--create-remote` is a no-op (never
+  recreates/overwrites an existing remote) — it only fills the gap when
+  there's nowhere to push yet.
+- Fails with a clear message (exit 3) if no token is available, or if the
+  GitHub API itself errors (e.g. name collision) — never leaves the repo in
+  a half-configured state.
 
 **Restoring an old version** (the reverse direction — git back out to a file
 ready to re-publish):
@@ -119,9 +141,13 @@ script's).
   `ALTABOTS_API_KEY`, and this skill never touches it.
 - Don't invent a "已知問題" / feedback mapping if the user hasn't given you one —
   leave that section out rather than guessing why a change was made.
-- Don't silently push to a remote that doesn't already exist. Setting up cloud
-  storage (which provider, whose account, repo visibility for client-sensitive
-  content) is a decision for the user/org to make explicitly.
+- Don't silently push to a remote that doesn't already exist, and don't auto-create
+  one unless `--create-remote` was explicitly passed. Which cloud, whose account,
+  and repo visibility for client-sensitive content are decisions the user/org
+  makes explicitly by passing that flag — never default into creating cloud
+  infrastructure on your own initiative.
+- A newly auto-created repo (`--create-remote`) is always private. Never pass
+  a flag that would make it public without the user explicitly asking for that.
 - After editing any script in `scripts/`, run `python3 scripts/test_skill.py` —
   it locks in behaviors that previously regressed silently (e.g. the Workflow
   schema being misdetected as FlowAgent, or a no-op commit skipping its tag).

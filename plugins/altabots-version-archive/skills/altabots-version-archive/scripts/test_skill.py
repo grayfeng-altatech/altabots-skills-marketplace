@@ -21,10 +21,13 @@ and would otherwise silently regress on a future edit:
   - diff_bot_nodes.py: QuestionAnswer schema (flat top-level diff).
 """
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -155,6 +158,162 @@ def test_archive_no_changelog_flag_skips_it():
                           "name": "T", "botType": "QuestionAnswer", "prompt": "hi"})
         run([sys.executable, str(ARCHIVE), str(bot), "--no-changelog"], cwd=tmp)
         check("archive: --no-changelog skips writing CHANGELOG.md", not (tmp / "CHANGELOG.md").exists())
+
+
+# ---------------------------------------------------------------------------
+# archive_to_git.py --create-remote (mock GitHub API; a real LOCAL bare repo
+# stands in for "GitHub" so the push half of the flow is genuinely exercised,
+# not just the HTTP call)
+# ---------------------------------------------------------------------------
+
+class _MockGitHubHandler(BaseHTTPRequestHandler):
+    created = []  # (path, body dict) for every POST this process handled
+
+    def log_message(self, *a):
+        pass  # silence default request logging
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length) or b"{}")
+        _MockGitHubHandler.created.append((self.path, body))
+
+        if body.get("name") == "trigger-error":
+            self.send_response(422)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"message": "name already exists on this account"}).encode())
+            return
+
+        bare = tempfile.mkdtemp(suffix=".git")
+        subprocess.run(["git", "init", "--quiet", "--bare", bare], check=True)
+        self.send_response(201)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"name": body.get("name"), "private": body.get("private"),
+                                      "ssh_url": bare}).encode())
+
+
+def _start_mock_github():
+    server = HTTPServer(("127.0.0.1", 0), _MockGitHubHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_port}"
+
+
+def test_create_remote_full_flow_personal_account():
+    _MockGitHubHandler.created.clear()
+    server, api_base = _start_mock_github()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bot = tmp / "agent.bot"
+            write_json(bot, {"formatVersion": "1.0", "exportType": "BOT", "exportTime": 1,
+                              "name": "T", "botType": "QuestionAnswer", "prompt": "hi"})
+            env = dict(os.environ, GITHUB_API_BASE=api_base, GITHUB_TOKEN="fake-token-for-test")
+            r = subprocess.run([sys.executable, str(ARCHIVE), str(bot), "--version", "1.0.0",
+                                 "--push", "--create-remote", "--remote-name", "my-new-project"],
+                                cwd=tmp, capture_output=True, text=True, env=env)
+            check("create-remote: exits 0", r.returncode == 0, r.stdout + r.stderr)
+            check("create-remote: calls POST /user/repos (personal account, no --github-org)",
+                  _MockGitHubHandler.created and _MockGitHubHandler.created[0][0] == "/user/repos",
+                  str(_MockGitHubHandler.created))
+            check("create-remote: request uses the --remote-name, not the folder name",
+                  _MockGitHubHandler.created[0][1].get("name") == "my-new-project")
+            check("create-remote: always requests private=True",
+                  _MockGitHubHandler.created[0][1].get("private") is True)
+
+            origin_url = run(["git", "remote", "get-url", "origin"], cwd=tmp).stdout.strip()
+            check("create-remote: sets 'origin' to a real path (the mock 'ssh_url')",
+                  bool(origin_url) and Path(origin_url).is_dir())
+
+            pushed_log = run(["git", "log", "--oneline"], cwd=origin_url).stdout
+            check("create-remote: the commit was ACTUALLY pushed to the created remote (real git push, not just URL config)",
+                  bool(pushed_log.strip()))
+    finally:
+        server.shutdown()
+
+
+def test_create_remote_under_org():
+    _MockGitHubHandler.created.clear()
+    server, api_base = _start_mock_github()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bot = tmp / "agent.bot"
+            write_json(bot, {"formatVersion": "1.0", "exportType": "BOT", "exportTime": 1,
+                              "name": "T", "botType": "QuestionAnswer", "prompt": "hi"})
+            env = dict(os.environ, GITHUB_API_BASE=api_base, GITHUB_TOKEN="fake-token-for-test")
+            r = subprocess.run([sys.executable, str(ARCHIVE), str(bot),
+                                 "--push", "--create-remote", "--github-org", "acme-corp"],
+                                cwd=tmp, capture_output=True, text=True, env=env)
+            check("create-remote --github-org: exits 0", r.returncode == 0, r.stdout + r.stderr)
+            check("create-remote --github-org: calls POST /orgs/acme-corp/repos, not /user/repos",
+                  _MockGitHubHandler.created and _MockGitHubHandler.created[0][0] == "/orgs/acme-corp/repos",
+                  str(_MockGitHubHandler.created))
+    finally:
+        server.shutdown()
+
+
+def test_create_remote_noop_when_origin_already_exists():
+    """--create-remote must never overwrite/recreate an origin that's
+    already configured — it's a fallback for the missing case only."""
+    _MockGitHubHandler.created.clear()
+    server, api_base = _start_mock_github()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bot = tmp / "agent.bot"
+            write_json(bot, {"formatVersion": "1.0", "exportType": "BOT", "exportTime": 1,
+                              "name": "T", "botType": "QuestionAnswer", "prompt": "hi"})
+            run([sys.executable, str(ARCHIVE), str(bot)], cwd=tmp)
+            existing_remote = tempfile.mkdtemp(suffix=".git")
+            subprocess.run(["git", "init", "--quiet", "--bare", existing_remote], check=True)
+            run(["git", "remote", "add", "origin", existing_remote], cwd=tmp)
+
+            env = dict(os.environ, GITHUB_API_BASE=api_base, GITHUB_TOKEN="fake-token-for-test")
+            r = subprocess.run([sys.executable, str(ARCHIVE), str(bot),
+                                 "--push", "--create-remote"],
+                                cwd=tmp, capture_output=True, text=True, env=env)
+            check("create-remote: no API call made when origin already exists",
+                  not _MockGitHubHandler.created, str(_MockGitHubHandler.created))
+            check("create-remote: still pushes to the pre-existing origin", "pushed to origin" in r.stdout)
+    finally:
+        server.shutdown()
+
+
+def test_create_remote_api_error_reported_clearly():
+    _MockGitHubHandler.created.clear()
+    server, api_base = _start_mock_github()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bot = tmp / "agent.bot"
+            write_json(bot, {"formatVersion": "1.0", "exportType": "BOT", "exportTime": 1,
+                              "name": "T", "botType": "QuestionAnswer", "prompt": "hi"})
+            env = dict(os.environ, GITHUB_API_BASE=api_base, GITHUB_TOKEN="fake-token-for-test")
+            r = subprocess.run([sys.executable, str(ARCHIVE), str(bot),
+                                 "--push", "--create-remote", "--remote-name", "trigger-error"],
+                                cwd=tmp, capture_output=True, text=True, env=env)
+            check("create-remote: non-zero exit on GitHub API error", r.returncode != 0)
+            check("create-remote: surfaces the API's error message, doesn't swallow it",
+                  "already exists" in (r.stdout + r.stderr))
+    finally:
+        server.shutdown()
+
+
+def test_create_remote_missing_token_fails_clearly():
+    _MockGitHubHandler.created.clear()
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        bot = tmp / "agent.bot"
+        write_json(bot, {"formatVersion": "1.0", "exportType": "BOT", "exportTime": 1,
+                          "name": "T", "botType": "QuestionAnswer", "prompt": "hi"})
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_TOKEN"}
+        r = subprocess.run([sys.executable, str(ARCHIVE), str(bot), "--push", "--create-remote"],
+                            cwd=tmp, capture_output=True, text=True, env=env)
+        check("create-remote: fails clearly (exit 3) when no token is available",
+              r.returncode == 3, r.stdout + r.stderr)
+        check("create-remote: no network call attempted without a token",
+              not _MockGitHubHandler.created)
 
 
 # ---------------------------------------------------------------------------
