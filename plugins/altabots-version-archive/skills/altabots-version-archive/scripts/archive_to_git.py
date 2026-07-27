@@ -313,7 +313,14 @@ def main(argv):
         print(f"no byte-level changes to archive for {dest.name} (identical to last commit)")
         commit_hash = run(["git", "rev-parse", "--short", "HEAD"], cwd=repo_dir, check=False)
     else:
-        has_parent = run(["git", "rev-parse", "HEAD^"], cwd=repo_dir, check=False) != ""
+        # NOTE: must check the exit code, not "is stdout empty" — when HEAD^
+        # doesn't resolve (the very first commit), `git rev-parse` still
+        # prints the literal unresolved arg ("HEAD^") to stdout alongside
+        # its fatal error on stderr, and exits 128. Checking stdout emptiness
+        # (an earlier version of this line did `!= ""`) sees that non-empty
+        # "HEAD^" text and wrongly concludes a parent exists.
+        has_parent = subprocess.run(["git", "rev-parse", "HEAD^"], cwd=str(repo_dir),
+                                     capture_output=True).returncode == 0
         run(["git", "commit", "-m", message], cwd=repo_dir)
         commit_hash = run(["git", "rev-parse", "--short", "HEAD"], cwd=repo_dir)
         print(f"committed {commit_hash}: {message}")

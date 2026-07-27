@@ -134,6 +134,13 @@ def test_archive_auto_writes_changelog_with_facts():
               "CHANGELOG.md" in run(["git", "log", "--name-only"], cwd=tmp).stdout)
         v1_log = (tmp / "CHANGELOG.md").read_text(encoding="utf-8")
         check("changelog: v1.0.0 entry present", "v1.0.0" in v1_log)
+        # Regression: `git rev-parse HEAD^` on the very first commit prints the
+        # literal unresolved "HEAD^" to stdout (not empty) alongside its fatal
+        # error, and exits non-zero. An exit-code check is required — a
+        # stdout-emptiness check wrongly concludes a parent exists and prints
+        # the wrong ("unchanged from previous") message for the FIRST version.
+        check("changelog: first version says '初版建置存檔', NOT the no-change message",
+              "初版建置存檔" in v1_log and "無實質內容變動" not in v1_log, v1_log)
 
         write_json(bot, {"formatVersion": "1.0", "exportType": "BOT", "exportTime": 2,
                           "name": "T", "botType": "QuestionAnswer", "prompt": "new prompt"})

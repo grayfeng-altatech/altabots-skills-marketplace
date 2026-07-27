@@ -3,7 +3,7 @@ name: altabots-version-archive
 description: Companion to altabots-agent-skill. Whenever a .bot/.flow is generated or published, archive it into a local git repo (permanent history — the AltaBots platform only keeps the 10 most recent versions and has no API to export a historical or current config back down). Auto-diffs against the previous version at the node/prompt-section level (FlowAgent, Workflow, and QuestionAnswer schemas) and auto-appends a factual changelog entry to CHANGELOG.md as part of the same command — no separate manual step. Can optionally auto-create a private GitHub repo (personal account or a GitHub Organization) via the GitHub API and push to it, with zero browser interaction. Can also restore/extract any archived historical version back out of git. Use whenever the user builds/updates/publishes an AltaBots Agent, FlowAgent, or Workflow and wants the change permanently recorded, or asks to set up version tracking / changelog / git archiving / cloud backup for an AltaBots agent.
 license: MIT
 metadata:
-  version: 2.4.0
+  version: 2.5.0
   generatedBy: altabots-version-archive
   customizedBy: gray
 ---
