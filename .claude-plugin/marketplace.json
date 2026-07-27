@@ -1,8 +1,7 @@
 {
   "name": "altabots-skills",
   "owner": {
-    "name": "Gray Feng",
-    "email": "gray.feng@data-di.com"
+    "name": "Gray"
   },
   "description": "Data-DI internal Claude Code skills for AltaBots agent development",
   "plugins": [

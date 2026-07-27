@@ -77,7 +77,7 @@ python3 scripts/archive_to_git.py <file.bot> [--repo-dir DIR] [--message "..."] 
 ```
 
 - Repo dir defaults to the file's own parent folder (the existing convention: one
-  project folder = one repo, e.g. `altabots-hitachi-elevator/`). Pass `--repo-dir`
+  project folder = one repo, e.g. `altabots-my-agent-project/`). Pass `--repo-dir`
   to use or create a different location.
 - `git init`s the repo on first use, writes `.gitignore` (excludes `__pycache__/`,
   `.env`, `*.key`, anything key-shaped — **never commit the AltaBots API key**),

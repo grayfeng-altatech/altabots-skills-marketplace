@@ -8,7 +8,7 @@ git -> (ready to re-publish to the) platform.
 
 Usage:
   python3 restore_version.py <repo-dir> <ref> <filename> [-o output.bot]
-  python3 restore_version.py ~/altabots-hitachi-elevator altabots-v1.0.3 hitachi-elevator-agent.bot
+  python3 restore_version.py ~/altabots-my-agent-project altabots-v1.0.3 my-agent.bot
 
 <ref> is anything git resolves: a tag from archive_to_git.py
 (altabots-v1.0.3), a commit hash, HEAD~2, a branch name, etc.

@@ -12,7 +12,7 @@ number (to tag the commit with it).
 
 Usage:
   python3 archive_to_git.py my-agent.bot
-  python3 archive_to_git.py my-agent.bot --repo-dir ~/agents/hitachi-elevator
+  python3 archive_to_git.py my-agent.bot --repo-dir ~/agents/my-agent-project
   python3 archive_to_git.py my-agent.bot --message "調整表單文字" --version 1.0.9
   python3 archive_to_git.py my-agent.bot --push
 
