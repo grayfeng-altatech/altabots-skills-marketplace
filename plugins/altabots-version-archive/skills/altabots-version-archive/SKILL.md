@@ -3,7 +3,7 @@ name: altabots-version-archive
 description: Companion to altabots-agent-skill. Whenever a .bot/.flow is generated or published, archive it into a local git repo (permanent history — the AltaBots platform only keeps the 10 most recent versions and has no API to export a historical or current config back down). Auto-diffs against the previous version at the node/prompt-section level (FlowAgent, Workflow, and QuestionAnswer schemas) and auto-appends a factual changelog entry to CHANGELOG.md as part of the same command — no separate manual step. Can optionally auto-create a private GitHub repo (personal account or a GitHub Organization) via the GitHub API and push to it, with zero browser interaction. Can also restore/extract any archived historical version back out of git. Use whenever the user builds/updates/publishes an AltaBots Agent, FlowAgent, or Workflow and wants the change permanently recorded, or asks to set up version tracking / changelog / git archiving / cloud backup for an AltaBots agent.
 license: MIT
 metadata:
-  version: 2.1.0
+  version: 2.2.0
   generatedBy: altabots-version-archive
   customizedBy: gray
 ---
@@ -43,6 +43,7 @@ scripts/
   diff_bot_nodes.py      # structural diff between two .bot/.flow snapshots (used internally by archive_to_git.py)
   clean_bot_diff.py      # git textconv helper: hides volatile fields (exportTime) from `git diff`/`git log -p`
   restore_version.py     # the reverse direction: extract a historical version back out of the git archive
+  check_remote_exists.py # read-only: does a repo by this name already exist? Run BEFORE --create-remote
   test_skill.py          # regression tests — run after editing any script here: python3 test_skill.py
 ```
 
@@ -124,6 +125,29 @@ python3 scripts/archive_to_git.py <file.bot> --push --create-remote \
 - Fails with a clear message (exit 3) if no token is available, or if the
   GitHub API itself errors (e.g. name collision) — never leaves the repo in
   a half-configured state.
+
+**MANDATORY before the first `--create-remote` call for a given project**
+(i.e. whenever the local repo doesn't have `origin` set yet): the user asked
+for this by name — never let `--create-remote` silently decide anything.
+Run the check, then ask, then act:
+```
+python3 scripts/check_remote_exists.py <project-name> [--github-org <org>]
+```
+This only reads (`GET /repos/<owner>/<name>`) — it never creates or pushes
+anything. Then:
+- **`FOUND <ssh_url>`** → tell the user a repo with this name already
+  exists there and ask them to confirm before pushing into it (e.g. *"我在
+  你的雲端發現一個叫 `<name>` 的 repo,確認要存進去嗎?"*). If they confirm,
+  set that URL as `origin` yourself (`git remote add origin <ssh_url>`) and
+  run `archive_to_git.py --push` (no `--create-remote` needed at that
+  point — `origin` is now already set).
+- **`NOT_FOUND`** → tell the user there's no such project yet and ask
+  whether to create one (e.g. *"目前沒有 `<name>` 這個專案,要建立並存入
+  嗎?"*). Only run `archive_to_git.py --push --create-remote` after they
+  say yes.
+- Never skip this check-and-ask step "to save time" — a name collision or a
+  wrong guess about which repo the user meant is exactly what this step
+  exists to prevent.
 
 **Restoring an old version** (the reverse direction — git back out to a file
 ready to re-publish):

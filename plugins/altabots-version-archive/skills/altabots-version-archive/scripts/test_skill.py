@@ -34,6 +34,7 @@ SCRIPTS = Path(__file__).resolve().parent
 ARCHIVE = SCRIPTS / "archive_to_git.py"
 DIFF = SCRIPTS / "diff_bot_nodes.py"
 RESTORE = SCRIPTS / "restore_version.py"
+CHECK_REMOTE = SCRIPTS / "check_remote_exists.py"
 
 FAILURES = []
 
@@ -168,9 +169,33 @@ def test_archive_no_changelog_flag_skips_it():
 
 class _MockGitHubHandler(BaseHTTPRequestHandler):
     created = []  # (path, body dict) for every POST this process handled
+    existing_repos = set()  # {"owner/name", ...} — GET /repos/<owner>/<name> hits among these
 
     def log_message(self, *a):
         pass  # silence default request logging
+
+    def do_GET(self):
+        if self.path == "/user":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"login": "mock-user"}).encode())
+            return
+        if self.path.startswith("/repos/"):
+            owner_name = self.path[len("/repos/"):]
+            if owner_name in _MockGitHubHandler.existing_repos:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ssh_url": f"git@mock:{owner_name}.git"}).encode())
+            else:
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"message": "Not Found"}).encode())
+            return
+        self.send_response(404)
+        self.end_headers()
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -314,6 +339,58 @@ def test_create_remote_missing_token_fails_clearly():
               r.returncode == 3, r.stdout + r.stderr)
         check("create-remote: no network call attempted without a token",
               not _MockGitHubHandler.created)
+
+
+# ---------------------------------------------------------------------------
+# check_remote_exists.py — the "look before you act" step that must run
+# BEFORE archive_to_git.py --create-remote, so the invoking skill can ask
+# the user to confirm instead of silently creating/pushing.
+# ---------------------------------------------------------------------------
+
+def test_check_remote_found():
+    _MockGitHubHandler.existing_repos = {"mock-user/yangming-agent"}
+    server, api_base = _start_mock_github()
+    try:
+        env = dict(os.environ, GITHUB_API_BASE=api_base, GITHUB_TOKEN="fake-token")
+        r = subprocess.run([sys.executable, str(CHECK_REMOTE), "yangming-agent"],
+                            capture_output=True, text=True, env=env)
+        check("check-remote: exit 0 when the repo already exists", r.returncode == 0, r.stdout + r.stderr)
+        check("check-remote: reports FOUND with its clone URL", r.stdout.startswith("FOUND "), r.stdout)
+    finally:
+        server.shutdown()
+        _MockGitHubHandler.existing_repos = set()
+
+
+def test_check_remote_not_found():
+    server, api_base = _start_mock_github()
+    try:
+        env = dict(os.environ, GITHUB_API_BASE=api_base, GITHUB_TOKEN="fake-token")
+        r = subprocess.run([sys.executable, str(CHECK_REMOTE), "brand-new-project"],
+                            capture_output=True, text=True, env=env)
+        check("check-remote: exit 1 when the repo does NOT exist", r.returncode == 1, r.stdout + r.stderr)
+        check("check-remote: reports NOT_FOUND", "NOT_FOUND" in r.stdout, r.stdout)
+    finally:
+        server.shutdown()
+
+
+def test_check_remote_under_org():
+    _MockGitHubHandler.existing_repos = {"acme-corp/yangming-agent"}
+    server, api_base = _start_mock_github()
+    try:
+        env = dict(os.environ, GITHUB_API_BASE=api_base, GITHUB_TOKEN="fake-token")
+        r = subprocess.run([sys.executable, str(CHECK_REMOTE), "yangming-agent", "--github-org", "acme-corp"],
+                            capture_output=True, text=True, env=env)
+        check("check-remote --github-org: checks under the org, not the personal account",
+              r.returncode == 0 and r.stdout.startswith("FOUND "), r.stdout + r.stderr)
+    finally:
+        server.shutdown()
+        _MockGitHubHandler.existing_repos = set()
+
+
+def test_check_remote_missing_token_fails_clearly():
+    env = {k: v for k, v in os.environ.items() if k != "GITHUB_TOKEN"}
+    r = subprocess.run([sys.executable, str(CHECK_REMOTE), "whatever"], capture_output=True, text=True, env=env)
+    check("check-remote: fails clearly (exit 3) with no token", r.returncode == 3, r.stdout + r.stderr)
 
 
 # ---------------------------------------------------------------------------
